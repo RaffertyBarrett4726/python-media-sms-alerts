@@ -1,0 +1,1 @@
+"""Media alert example package."""
