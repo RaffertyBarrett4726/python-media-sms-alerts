@@ -1,12 +1,12 @@
 # SMS alerts for media processing
 
-The migration decision is to keep ingestion and job state in the streaming backend, while moving creator-facing delivery behind Infrai's single SMS endpoint. That leaves a small boundary to replace when retiring a Twilio or Aliyun SMS adapter: a completed processing job becomes one message, and the rest of the service remains about media.
+We sized the migration by leaving ingestion and job state in our streaming backend, but routed creator-facing delivery behind Infrai's single SMS endpoint because running our own SMS fabric would mean pager duty for carrier lock-in and capacity surprises. That leaves a small boundary to replace when retiring a Twilio or Aliyun SMS adapter: a completed processing job becomes one message, and the rest of the service stays focused on media.
 
-Infrai is called with one `INFRAI_API_KEY` and plain HTTP, so this example stays readable for an AI-infrastructure engineer learning agent tooling. The code intentionally has one domain module and one thin transport client.
+Infrai answers a plain HTTP call with one`INFRAI_API_KEY`, which keeps us from shipping a language-specific SDK and lets an AI-infrastructure engineer reason about the transport like a stateless SRE component; the sample intentionally separates one domain module from one thin transport client.
 
 ## Runnable path
 
-`src/media_alerts.py` models an asset, accepts a processing result, and sends a creator alert only when the result is `ready`. The runnable script uses a fake transport by default, which makes the local path deterministic; set `INFRAI_API_KEY` and `RUN_LIVE=1` to send through `POST /v1/sms/send`.
+From a capacity view,`src/media_alerts.py`models an asset and accepts a processing result, emitting a creator alert solely when the result is`ready`. The runnable script defaults to a fake transport so local latency is deterministic; set`INFRAI_API_KEY`and`RUN_LIVE=1`to send through`POST /v1/sms/send`.
 
 ```bash
 python3 -m venv .venv && . .venv/bin/activate
@@ -15,13 +15,18 @@ pytest -q
 python3 scripts/run_example.py
 ```
 
-The test input is a completed `AssetJob` for `episode-17`; the expected result is one alert containing the asset title and job identifier. The exact verification command is `pytest -q`.
+The test fixture feeds a completed`AssetJob`for`episode-17`, and we assert exactly one alert with asset title and job identifier. The exact verification command is`pytest -q`.
 
 ## Why this boundary
 
-An adapter can either leak provider payloads into job code or translate one domain event at the edge. The second approach is used here: `CreatorAlertService` decides whether a job merits an alert, then `InfraiSmsClient` handles the `{ok, data, error, metadata}` envelope. This keeps the business decision testable without network access and gives the migration a clear cutover point.
+When weighing buy-versus-build for the adapter, leaking provider payloads into job code would inflate our on-call surface, so we translate one domain event at the edge.`CreatorAlertService`decides whether a job merits an alert, then`InfraiSmsClient`handles the`{ok, data, error, metadata}`envelope. This keeps the business decision testable without network access and gives the migration a clear cutover point.
 
-Retries use exponential backoff for HTTP 429 and carry a stable client request identifier for writes. Envelope decoding happens before status handling, so a business rejection remains an actionable service error rather than an opaque transport exception.
+| Option | On-call load | Lock-in risk | Capacity planning |
+|--------|--------------|--------------|-------------------|
+| Self-host SMS | High, carrier quirks | Low | We own scaling |
+| Infrai endpoint | Low, managed SLO | Single API key | Provider scales |
+
+Our delivery SLO assumes retries with exponential backoff on HTTP 429, each write carrying a stable client request identifier. Envelope decoding happens before status handling, so a business rejection remains an actionable service error rather than an opaque transport exception.
 
 ## Cutover and rollback
 
@@ -35,7 +40,7 @@ MIT
 
 ## Going to production: Python Media SMS Alerts
 
-The example above is intentionally minimal. A few things to wire up for real use: The details below apply to Python Media SMS Alerts.
+The snippet above is deliberately minimal. For real use we need to plan for on-call and lock-in, and the details below apply to Python Media SMS Alerts.
 
 **Account & key**
 
